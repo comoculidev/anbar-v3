@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Giriş — Anbar Sistemi</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="login-shell">
+  <div class="login-card">
+    <div class="login-brand"><span class="tag-dot"></span>Anbar Sistemi</div>
+    <p class="login-sub">Davam etmək üçün hesabınıza daxil olun.</p>
+
+    <div class="login-error" id="loginError"></div>
+
+    <form id="loginForm">
+      <div class="field">
+        <label for="username">İstifadəçi adı</label>
+        <input type="text" id="username" name="username" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="password">Şifrə</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn btn-accent" id="loginBtn">Daxil ol</button>
+    </form>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script>
+  // Artıq daxil olubsa birbaşa öz panelinə yönləndir
+  (async () => {
+    try {
+      const { user } = await api.get('/auth/me');
+      window.location.href = user.role === 'superadmin' ? 'superadmin/inventory.html' : (user.role === 'admin' ? 'admin/inventory.html' : 'user/inventory.html');
+    } catch (_) { /* daxil olmayıb, login formunu göstər */ }
+  })();
+
+  const form = document.getElementById('loginForm');
+  const errorBox = document.getElementById('loginError');
+  const loginBtn = document.getElementById('loginBtn');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorBox.style.display = 'none';
+    loginBtn.disabled = true;
+    loginBtn.innerHTML = '<span class="spinner"></span> Yoxlanılır...';
+
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+
+    try {
+      const { user } = await api.post('/auth/login', { username, password });
+      window.location.href = user.role === 'superadmin' ? 'superadmin/inventory.html' : (user.role === 'admin' ? 'admin/inventory.html' : 'user/inventory.html');
+    } catch (err) {
+      errorBox.textContent = err.message;
+      errorBox.style.display = 'block';
+      loginBtn.disabled = false;
+      loginBtn.textContent = 'Daxil ol';
+    }
+  });
+</script>
+</body>
+</html>

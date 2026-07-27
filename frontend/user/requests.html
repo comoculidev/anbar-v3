@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>İstəklərim — Anbar Sistemi</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="tag-dot"></span>Anbar Sistemi</div>
+    <nav class="nav-group">
+      <div class="nav-label">Mənim</div>
+      <a href="inventory.html" class="nav-link">Mallar</a>
+      <a href="requests.html" class="nav-link active">İstəklərim</a>
+      <a href="wishlist.html" class="nav-link" id="wishlistNavLink">Arzu etdiklərim</a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="avatar" id="avatarInitial">U</div>
+        <div>
+          <div class="name" id="userName">—</div>
+          <div class="role">İstifadəçi</div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="logout()">Çıxış et</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <h1>İstəklərim</h1>
+        <p>Anbarda olan mallardan birdən çox seçib bir dəfəyə istək göndərin. Anbardar miqdarı təyin edib göndərəndə "Razıyam" ya "Razı deyiləm" seçin, statusu canlı izləyin.</p>
+      </div>
+      <button class="btn btn-accent" id="addBtn">+ Yeni istək</button>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>Mal</th>
+            <th>İstənilən miqdar</th>
+            <th>Təyinat</th>
+            <th>Tarix</th>
+            <th>Status</th>
+            <th style="width:200px;">Əməliyyat</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+      <div id="emptyState" class="empty-state" style="display:none;">
+        <div class="icon">📋</div>
+        <h3>Hələ istək göndərməmisiniz</h3>
+        <p>Yuxarıdakı "+ Yeni istək" düyməsi ilə başlayın.</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Yeni istək modalı: səbət tərzi - birdən çox mal seçilə bilər -->
+<div class="modal-overlay" id="requestModal" style="display:none;">
+  <div class="modal" style="max-width: 520px;">
+    <h2>Yeni istək</h2>
+    <p class="modal-sub">Lazım olan malları bir-bir axtarıb səbətə əlavə edin, sonda hamısını birlikdə göndərin.</p>
+
+    <div class="field">
+      <label for="itemSearch">Mal axtar</label>
+      <input type="text" id="itemSearch" placeholder="Mal adını yazın..." autocomplete="off">
+      <div id="itemSuggestions" style="border:1px solid var(--border); border-radius:6px; margin-top:4px; max-height:160px; overflow-y:auto; display:none; background:#fff;"></div>
+    </div>
+
+    <div id="cartEmpty" class="muted" style="font-size:13px; padding:10px 0;">Səbətdə hələ mal yoxdur.</div>
+    <div id="cartList" style="display:flex; flex-direction:column; gap:8px; margin: 6px 0 16px;"></div>
+
+    <div class="field">
+      <label for="reqPurpose">Hara / nə üçün lazımdır (bütün mallar üçün)</label>
+      <textarea id="reqPurpose" placeholder="Məs. 3-cü mərtəbə, iclas otağı üçün"></textarea>
+    </div>
+
+    <div class="field-error" id="reqError" style="display:none;"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-outline" id="cancelModal">Ləğv et</button>
+      <button type="button" class="btn btn-accent" id="saveBtn">Səbəti göndər</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/socket-client.js"></script>
+<script>
+let itemSearchDebounce = null;
+let cart = []; // { inventory_id, name, unit, quantity }
+
+(async () => {
+  const user = await requireAuth('user');
+  if (!user) return;
+  document.getElementById('userName').textContent = user.full_name;
+  document.getElementById('avatarInitial').textContent = user.full_name.charAt(0).toUpperCase();
+  loadRequests();
+
+  try {
+    const settings = await api.get('/settings');
+    if (settings.wishlist_enabled === false) {
+      document.getElementById('wishlistNavLink').style.display = 'none';
+    }
+  } catch (_) { /* səssiz */ }
+
+  const socket = connectSocket();
+  socket.on('request:updated', (updated) => {
+    const toastType = updated.status === 'completed' ? 'success' : (updated.status === 'rejected' ? 'error' : 'default');
+    showToast(`"${updated.item_name}" istəyiniz: ${STATUS_LABELS[updated.status]}`, toastType);
+    loadRequests();
+  });
+})();
+
+async function loadRequests() {
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:40px; color:var(--ink-500);">Yüklənir...</td></tr>`;
+  try {
+    const { requests } = await api.get('/requests');
+    const emptyState = document.getElementById('emptyState');
+    if (requests.length === 0) {
+      tbody.innerHTML = '';
+      emptyState.style.display = 'block';
+      return;
+    }
+    emptyState.style.display = 'none';
+    tbody.innerHTML = requests.map(r => `
+      <tr>
+        <td><strong>${escapeHtml(r.item_name)}</strong></td>
+        <td><span class="qty">${r.requested_qty} ${escapeHtml(r.unit || '')}</span>${r.approved_qty ? ` <span class="muted" style="font-size:12px;">→ ${r.approved_qty}</span>` : ''}</td>
+        <td class="muted">${r.purpose ? escapeHtml(r.purpose) : '—'}</td>
+        <td class="muted">${formatDate(r.created_at)}</td>
+        <td><span class="status-pill ${r.status}">${STATUS_LABELS[r.status]}</span></td>
+        <td>
+          ${r.status === 'pending_agreement' ? `
+            <div class="row-actions">
+              <button class="btn btn-success btn-sm" onclick="agreeRequest(${r.id})">Razıyam</button>
+              <button class="btn btn-danger btn-sm" onclick="disagreeRequest(${r.id})">Razı deyiləm</button>
+            </div>
+          ` : '<span class="muted">—</span>'}
+        </td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function agreeRequest(id) {
+  try {
+    await api.post(`/requests/${id}/agree`);
+    showToast('Razılığınız qeyd edildi', 'success');
+    loadRequests();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function disagreeRequest(id) {
+  try {
+    await api.post(`/requests/${id}/disagree`);
+    showToast('İstəkdən imtina edildi', 'default');
+    loadRequests();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// ---------- Modal: mal axtarışı + səbət ----------
+const requestModal = document.getElementById('requestModal');
+const reqError = document.getElementById('reqError');
+const itemSearch = document.getElementById('itemSearch');
+const suggestions = document.getElementById('itemSuggestions');
+const cartList = document.getElementById('cartList');
+const cartEmpty = document.getElementById('cartEmpty');
+
+document.getElementById('addBtn').addEventListener('click', () => {
+  cart = [];
+  renderCart();
+  itemSearch.value = '';
+  document.getElementById('reqPurpose').value = '';
+  reqError.style.display = 'none';
+  suggestions.style.display = 'none';
+  requestModal.style.display = 'flex';
+});
+document.getElementById('cancelModal').addEventListener('click', () => requestModal.style.display = 'none');
+
+itemSearch.addEventListener('input', () => {
+  clearTimeout(itemSearchDebounce);
+  const q = itemSearch.value.trim();
+  if (!q) { suggestions.style.display = 'none'; return; }
+  itemSearchDebounce = setTimeout(async () => {
+    try {
+      const { items } = await api.get(`/inventory/names?q=${encodeURIComponent(q)}`);
+      if (items.length === 0) {
+        suggestions.innerHTML = `<div style="padding:10px; color:var(--ink-500); font-size:13px;">Nəticə yoxdur</div>`;
+      } else {
+        suggestions.innerHTML = items.map(i =>
+          `<div class="suggestion-item" data-id="${i.id}" data-name="${escapeHtml(i.name)}" data-unit="${escapeHtml(i.unit || 'ədəd')}" style="padding:10px 12px; cursor:pointer; font-size:14px;">${escapeHtml(i.name)} <span class="muted" style="font-size:12px;">(${escapeHtml(i.unit || 'ədəd')})</span></div>`
+        ).join('');
+      }
+      suggestions.style.display = 'block';
+    } catch (_) { /* səssiz */ }
+  }, 300);
+});
+
+suggestions.addEventListener('click', (e) => {
+  const target = e.target.closest('.suggestion-item');
+  if (!target || !target.dataset.id) return;
+
+  const id = target.dataset.id;
+  if (cart.some(c => c.inventory_id === id)) {
+    showToast('Bu mal artıq səbətdədir', 'default');
+  } else {
+    cart.push({ inventory_id: id, name: target.dataset.name, unit: target.dataset.unit, quantity: 1 });
+    renderCart();
+  }
+
+  itemSearch.value = '';
+  suggestions.style.display = 'none';
+});
+
+suggestions.addEventListener('mouseover', (e) => {
+  const target = e.target.closest('.suggestion-item');
+  if (target) target.style.background = '#f5f6f8';
+});
+suggestions.addEventListener('mouseout', (e) => {
+  const target = e.target.closest('.suggestion-item');
+  if (target) target.style.background = '';
+});
+
+function renderCart() {
+  if (cart.length === 0) {
+    cartEmpty.style.display = 'block';
+    cartList.innerHTML = '';
+    return;
+  }
+  cartEmpty.style.display = 'none';
+  cartList.innerHTML = cart.map((c, idx) => `
+    <div style="display:flex; align-items:center; gap:8px; background:#fafbfc; border:1px solid var(--border); border-radius:6px; padding:8px 10px;">
+      <div style="flex:1; font-size:14px;">${escapeHtml(c.name)} <span class="muted" style="font-size:12px;">(${escapeHtml(c.unit)})</span></div>
+      <input type="number" min="1" value="${c.quantity}" data-idx="${idx}" class="cart-qty-input" style="width:70px; padding:6px 8px; border:1px solid var(--border); border-radius:4px; font-size:13px;">
+      <button type="button" class="btn btn-danger btn-sm" data-remove="${idx}">✕</button>
+    </div>
+  `).join('');
+}
+
+cartList.addEventListener('input', (e) => {
+  if (e.target.classList.contains('cart-qty-input')) {
+    const idx = Number(e.target.dataset.idx);
+    const val = Number(e.target.value);
+    cart[idx].quantity = val > 0 ? val : 1;
+  }
+});
+
+cartList.addEventListener('click', (e) => {
+  const removeIdx = e.target.dataset.remove;
+  if (removeIdx !== undefined) {
+    cart.splice(Number(removeIdx), 1);
+    renderCart();
+  }
+});
+
+document.getElementById('saveBtn').addEventListener('click', async () => {
+  reqError.style.display = 'none';
+
+  if (cart.length === 0) {
+    reqError.textContent = 'Səbətə ən azı bir mal əlavə edin.';
+    reqError.style.display = 'block';
+    return;
+  }
+
+  const purpose = document.getElementById('reqPurpose').value.trim();
+  const items = cart.map(c => ({ inventory_id: c.inventory_id, requested_qty: c.quantity }));
+
+  const saveBtn = document.getElementById('saveBtn');
+  saveBtn.disabled = true;
+  saveBtn.innerHTML = '<span class="spinner"></span> Göndərilir...';
+
+  try {
+    await api.post('/requests/bulk', { purpose, items });
+    showToast(`${items.length} mal üçün istək göndərildi`, 'success');
+    requestModal.style.display = 'none';
+    loadRequests();
+  } catch (err) {
+    reqError.textContent = err.message;
+    reqError.style.display = 'block';
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Səbəti göndər';
+  }
+});
+</script>
+</body>
+</html>

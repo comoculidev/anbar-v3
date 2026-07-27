@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mallar — Anbar Sistemi</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="tag-dot"></span>Anbar Sistemi</div>
+    <nav class="nav-group">
+      <div class="nav-label">Mənim</div>
+      <a href="inventory.html" class="nav-link active">Mallar</a>
+      <a href="requests.html" class="nav-link">İstəklərim</a>
+      <a href="wishlist.html" class="nav-link" id="wishlistNavLink">Arzu etdiklərim</a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="avatar" id="avatarInitial">U</div>
+        <div>
+          <div class="name" id="userName">—</div>
+          <div class="role">İstifadəçi</div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="logout()">Çıxış et</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <h1>Mallar</h1>
+        <p>Anbarda mövcud olan malların siyahısı. İstək göndərmək üçün "İstəklərim" bölməsinə keçin.</p>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" class="search-input" id="searchInput" placeholder="Mal adı ilə axtar...">
+      <button class="btn btn-accent" onclick="window.location.href='requests.html'">+ İstək göndər</button>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead><tr><th>Mal adı</th></tr></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+      <div id="emptyState" class="empty-state" style="display:none;">
+        <div class="icon">📦</div>
+        <h3>Nəticə tapılmadı</h3>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="../js/api.js"></script>
+<script>
+let searchDebounce = null;
+
+(async () => {
+  const user = await requireAuth('user');
+  if (!user) return;
+  document.getElementById('userName').textContent = user.full_name;
+  document.getElementById('avatarInitial').textContent = user.full_name.charAt(0).toUpperCase();
+  loadItems();
+
+  try {
+    const settings = await api.get('/settings');
+    if (settings.wishlist_enabled === false) {
+      document.getElementById('wishlistNavLink').style.display = 'none';
+    }
+  } catch (_) { /* səssiz */ }
+})();
+
+document.getElementById('searchInput').addEventListener('input', (e) => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => loadItems(e.target.value.trim()), 300);
+});
+
+async function loadItems(q = '') {
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = `<tr><td style="text-align:center; padding:40px; color:var(--ink-500);">Yüklənir...</td></tr>`;
+  try {
+    const params = q ? `?q=${encodeURIComponent(q)}` : '';
+    const { items } = await api.get(`/inventory/names${params}`);
+    const emptyState = document.getElementById('emptyState');
+    if (items.length === 0) {
+      tbody.innerHTML = '';
+      emptyState.style.display = 'block';
+      return;
+    }
+    emptyState.style.display = 'none';
+    tbody.innerHTML = items.map(i => `<tr><td>${escapeHtml(i.name)} <span class="muted" style="font-size:12px;">(${escapeHtml(i.unit || 'ədəd')})</span></td></tr>`).join('');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+</script>
+</body>
+</html>

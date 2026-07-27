@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arzu etdiklərim — Anbar Sistemi</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="tag-dot"></span>Anbar Sistemi</div>
+    <nav class="nav-group">
+      <div class="nav-label">Mənim</div>
+      <a href="inventory.html" class="nav-link">Mallar</a>
+      <a href="requests.html" class="nav-link">İstəklərim</a>
+      <a href="wishlist.html" class="nav-link active" id="wishlistNavLink">Arzu etdiklərim</a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="avatar" id="avatarInitial">U</div>
+        <div>
+          <div class="name" id="userName">—</div>
+          <div class="role">İstifadəçi</div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="logout()">Çıxış et</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <h1>Arzu etdiklərim</h1>
+        <p>Anbarda olmayan, sizə lazım olan malları burada tələb edin.</p>
+      </div>
+      <button class="btn btn-accent" id="addBtn">+ Yeni tələb</button>
+    </div>
+
+    <div class="feature-banner" id="disabledBanner" style="display:none;">
+      ⚠️ Bu funksiya hazırda admin tərəfindən deaktiv edilib. Mövcud tələblərinizi hələ də görə bilərsiniz.
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>Mal adı</th>
+            <th>Lazım olan miqdar</th>
+            <th>Qeyd</th>
+            <th>Tarix</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+      <div id="emptyState" class="empty-state" style="display:none;">
+        <div class="icon">✨</div>
+        <h3>Hələ tələb göndərməmisiniz</h3>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="modal-overlay" id="wishModal" style="display:none;">
+  <div class="modal">
+    <h2>Yeni tələb</h2>
+    <p class="modal-sub">Anbarda olmayan, sizə lazım olan malı təsvir edin.</p>
+    <form id="wishForm">
+      <div class="field">
+        <label for="wishName">Mal adı</label>
+        <input type="text" id="wishName" required placeholder="Məs. Ergonomik ofis oturacağı">
+      </div>
+      <div class="field">
+        <label for="wishQty">Lazım olan miqdar</label>
+        <input type="number" id="wishQty" min="1" required>
+      </div>
+      <div class="field">
+        <label for="wishDesc">Əlavə qeyd</label>
+        <textarea id="wishDesc" placeholder="Məs. hansı şöbə üçün, təxmini vaxt və s."></textarea>
+      </div>
+      <div class="field-error" id="wishError" style="display:none;"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-outline" id="cancelModal">Ləğv et</button>
+        <button type="submit" class="btn btn-accent" id="saveBtn">Göndər</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/socket-client.js"></script>
+<script>
+(async () => {
+  const user = await requireAuth('user');
+  if (!user) return;
+  document.getElementById('userName').textContent = user.full_name;
+  document.getElementById('avatarInitial').textContent = user.full_name.charAt(0).toUpperCase();
+  loadWishlist();
+
+  try {
+    const settings = await api.get('/settings');
+    applyWishlistToggle(settings.wishlist_enabled);
+  } catch (_) { /* səssiz - default aktiv qalır */ }
+
+  const socket = connectSocket();
+  socket.on('wishlist:updated', (updated) => {
+    showToast(`"${updated.item_name}" tələbiniz ${STATUS_LABELS[updated.status].toLowerCase()}`, updated.status === 'approved' ? 'success' : (updated.status === 'rejected' ? 'error' : 'default'));
+    loadWishlist();
+  });
+  socket.on('settings:updated', (settings) => applyWishlistToggle(settings.wishlist_enabled));
+})();
+
+function applyWishlistToggle(enabled) {
+  const addBtn = document.getElementById('addBtn');
+  const banner = document.getElementById('disabledBanner');
+  if (enabled === false) {
+    addBtn.style.display = 'none';
+    banner.style.display = 'flex';
+  } else {
+    addBtn.style.display = 'inline-flex';
+    banner.style.display = 'none';
+  }
+}
+
+async function loadWishlist() {
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:40px; color:var(--ink-500);">Yüklənir...</td></tr>`;
+  try {
+    const { wishlist } = await api.get('/wishlist');
+    const emptyState = document.getElementById('emptyState');
+    if (wishlist.length === 0) {
+      tbody.innerHTML = '';
+      emptyState.style.display = 'block';
+      return;
+    }
+    emptyState.style.display = 'none';
+    tbody.innerHTML = wishlist.map(w => `
+      <tr>
+        <td><strong>${escapeHtml(w.item_name)}</strong></td>
+        <td><span class="qty">${w.needed_qty}</span></td>
+        <td class="muted">${w.description ? escapeHtml(w.description) : '—'}</td>
+        <td class="muted">${formatDate(w.created_at)}</td>
+        <td><span class="status-pill ${w.status}">${STATUS_LABELS[w.status]}</span></td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+const wishModal = document.getElementById('wishModal');
+const wishForm = document.getElementById('wishForm');
+const wishError = document.getElementById('wishError');
+
+document.getElementById('addBtn').addEventListener('click', () => {
+  wishForm.reset();
+  wishError.style.display = 'none';
+  wishModal.style.display = 'flex';
+});
+document.getElementById('cancelModal').addEventListener('click', () => wishModal.style.display = 'none');
+
+wishForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const payload = {
+    item_name: document.getElementById('wishName').value.trim(),
+    needed_qty: Number(document.getElementById('wishQty').value),
+    description: document.getElementById('wishDesc').value.trim(),
+  };
+
+  const saveBtn = document.getElementById('saveBtn');
+  saveBtn.disabled = true;
+  saveBtn.innerHTML = '<span class="spinner"></span> Göndərilir...';
+
+  try {
+    await api.post('/wishlist', payload);
+    showToast('Tələb göndərildi', 'success');
+    wishModal.style.display = 'none';
+    loadWishlist();
+  } catch (err) {
+    wishError.textContent = err.message;
+    wishError.style.display = 'block';
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Göndər';
+  }
+});
+</script>
+</body>
+</html>

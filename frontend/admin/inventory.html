@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mal əlavə et — Anbar Sistemi</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="tag-dot"></span>Anbar Sistemi</div>
+    <nav class="nav-group">
+      <div class="nav-label">İdarəetmə</div>
+      <a href="inventory.html" class="nav-link active">Mal əlavə et</a>
+      <a href="full-inventory.html" class="nav-link" id="fullInventoryNavLink" style="display:none;">Tam inventar</a>
+      <a href="requests.html" class="nav-link">İstəklər <span class="badge" id="reqBadge" style="display:none">0</span></a>
+      <a href="wishlist.html" class="nav-link">Arzu olunan mallar <span class="badge" id="wishBadge" style="display:none">0</span></a>
+      <a href="users.html" class="nav-link">İstifadəçilər</a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="avatar" id="avatarInitial">A</div>
+        <div>
+          <div class="name" id="userName">—</div>
+          <div class="role" id="userRole">Admin</div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="logout()">Çıxış et</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <h1>Mal əlavə et</h1>
+        <p>Yeni mal yaradın və ya mövcud mala say əlavə edin.</p>
+      </div>
+    </div>
+
+    <div class="card" style="padding: 24px; max-width: 560px;">
+      <form id="addForm">
+        <div class="field">
+          <label for="productSearch">Mal adı</label>
+          <input type="text" id="productSearch" placeholder="Mal adını yazın..." autocomplete="off" required>
+          <div id="productSuggestions" style="border:1px solid var(--border); border-radius:6px; margin-top:4px; max-height:180px; overflow-y:auto; display:none; background:#fff;"></div>
+          <input type="hidden" id="selectedInventoryId">
+          <div id="existingHint" class="field-hint" style="display:none; color: var(--success);"></div>
+        </div>
+
+        <div id="newItemFields">
+          <div class="field">
+            <label for="newInventoryNumber">İnventar nömrəsi</label>
+            <input type="text" id="newInventoryNumber" placeholder="Məs. INV-00231">
+          </div>
+          <div class="field">
+            <label for="newUnit">Ölçü vahidi</label>
+            <input type="text" id="newUnit" list="unitOptions" placeholder="Məs. ədəd, kg, litr, paket" value="ədəd">
+            <datalist id="unitOptions">
+              <option value="ədəd"></option>
+              <option value="kg"></option>
+              <option value="litr"></option>
+              <option value="paket"></option>
+              <option value="qutu"></option>
+              <option value="metr"></option>
+              <option value="dəst"></option>
+            </datalist>
+          </div>
+          <div class="field">
+            <label for="newUnitValue">Dəyəri (AZN) — vahid qiymət</label>
+            <input type="number" id="newUnitValue" min="0" step="0.01" placeholder="0.00">
+            <div class="field-hint">Dəyəri 0-dan böyük olan mallardan gələn istəklər superadmin təsdiqi tələb edəcək.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="addQty" id="addQtyLabel">Say</label>
+          <input type="number" id="addQty" min="1" required placeholder="0">
+        </div>
+
+        <div class="field-error" id="addError" style="display:none;"></div>
+        <button type="submit" class="btn btn-accent" id="addSubmitBtn" style="width:100%;">Əlavə et</button>
+      </form>
+    </div>
+
+    <div class="card" style="padding: 24px; max-width: 560px; margin-top: 20px;">
+      <h2 style="font-family: var(--font-display); font-size: 16px; margin: 0 0 6px;">Excel ilə toplu idxal</h2>
+      <p class="muted" style="font-size: 13px; margin: 0 0 14px;">
+        Sütunlar: <strong>Ad</strong>, <strong>İnventar Nömrəsi</strong>, <strong>Say</strong>, <strong>Ölçü vahidi</strong>, <strong>Dəyər (AZN)</strong>.
+        Mövcud inventar nömrəsi tapılarsa say üzərinə əlavə olunur.
+      </p>
+      <input type="file" id="importFile" accept=".xlsx,.xls">
+      <button class="btn btn-outline btn-sm" id="importBtn" style="margin-top:10px;">Faylı yüklə</button>
+      <div id="importResult" style="margin-top:12px; font-size:13px;"></div>
+    </div>
+  </main>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/socket-client.js"></script>
+<script src="../js/notif-badges.js"></script>
+<script>
+let searchDebounce = null;
+
+(async () => {
+  const user = await requireAuth(['admin', 'superadmin']);
+  if (!user) return;
+  document.getElementById('userName').textContent = user.full_name;
+  document.getElementById('avatarInitial').textContent = user.full_name.charAt(0).toUpperCase();
+  document.getElementById('userRole').textContent = user.role === 'superadmin' ? 'Superadmin' : 'Admin';
+  initNotifBadges();
+
+  const socket = connectSocket();
+  applyFullInventoryNavToggle(user, socket);
+})();
+
+// ---------- Mal axtarışı (typeahead) — admin üçün HƏMİŞƏ aktivdir ----------
+const productSearch = document.getElementById('productSearch');
+const suggestions = document.getElementById('productSuggestions');
+const selectedIdInput = document.getElementById('selectedInventoryId');
+const newItemFields = document.getElementById('newItemFields');
+const existingHint = document.getElementById('existingHint');
+const addQtyLabel = document.getElementById('addQtyLabel');
+
+productSearch.addEventListener('input', () => {
+  clearSelection();
+  clearTimeout(searchDebounce);
+  const q = productSearch.value.trim();
+  if (!q) { suggestions.style.display = 'none'; return; }
+  searchDebounce = setTimeout(async () => {
+    try {
+      const { items } = await api.get(`/inventory/search?q=${encodeURIComponent(q)}`);
+      if (items.length === 0) {
+        suggestions.innerHTML = `<div style="padding:10px; color:var(--ink-500); font-size:13px;">Yeni mal olaraq əlavə olunacaq</div>`;
+      } else {
+        suggestions.innerHTML = items.map(i =>
+          `<div class="suggestion-item" data-id="${i.id}" data-name="${escapeHtml(i.name)}" data-unit="${escapeHtml(i.unit)}" style="padding:10px 12px; cursor:pointer; font-size:14px;">${escapeHtml(i.name)} <span class="muted" style="font-size:12px;">(${escapeHtml(i.unit)})</span></div>`
+        ).join('');
+      }
+      suggestions.style.display = 'block';
+    } catch (_) { /* səssiz */ }
+  }, 300);
+});
+
+suggestions.addEventListener('click', (e) => {
+  const target = e.target.closest('.suggestion-item');
+  if (!target || !target.dataset.id) return;
+  productSearch.value = target.dataset.name;
+  selectedIdInput.value = target.dataset.id;
+  suggestions.style.display = 'none';
+  newItemFields.style.display = 'none';
+  existingHint.style.display = 'block';
+  existingHint.textContent = `Mövcud mal seçildi (vahid: ${target.dataset.unit}) — daxil etdiyiniz say bu malın üzərinə əlavə olunacaq.`;
+  addQtyLabel.textContent = `Əlavə olunacaq say (${target.dataset.unit})`;
+});
+
+suggestions.addEventListener('mouseover', (e) => {
+  const t = e.target.closest('.suggestion-item');
+  if (t) t.style.background = '#f5f6f8';
+});
+suggestions.addEventListener('mouseout', (e) => {
+  const t = e.target.closest('.suggestion-item');
+  if (t) t.style.background = '';
+});
+
+function clearSelection() {
+  selectedIdInput.value = '';
+  newItemFields.style.display = 'block';
+  existingHint.style.display = 'none';
+  addQtyLabel.textContent = 'Say';
+}
+
+// ---------- Form göndərmə ----------
+document.getElementById('addForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errorBox = document.getElementById('addError');
+  const btn = document.getElementById('addSubmitBtn');
+  errorBox.style.display = 'none';
+
+  const quantity = Number(document.getElementById('addQty').value);
+  const payload = { quantity };
+
+  if (selectedIdInput.value) {
+    payload.inventory_id = selectedIdInput.value;
+  } else {
+    payload.name = productSearch.value.trim();
+    payload.inventory_number = document.getElementById('newInventoryNumber').value.trim();
+    payload.unit = document.getElementById('newUnit').value.trim() || 'ədəd';
+    payload.unit_value = document.getElementById('newUnitValue').value || 0;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Göndərilir...';
+
+  try {
+    const result = await api.post('/inventory', payload);
+    showToast(result.merged ? 'Say mövcud mala əlavə olundu' : 'Yeni mal əlavə edildi', 'success');
+    document.getElementById('addForm').reset();
+    clearSelection();
+    document.getElementById('newUnit').value = 'ədəd';
+  } catch (err) {
+    errorBox.textContent = err.message;
+    errorBox.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Əlavə et';
+  }
+});
+
+// ---------- Excel idxalı ----------
+document.getElementById('importBtn').addEventListener('click', async () => {
+  const fileInput = document.getElementById('importFile');
+  const resultBox = document.getElementById('importResult');
+  const btn = document.getElementById('importBtn');
+
+  if (!fileInput.files.length) {
+    showToast('Əvvəlcə fayl seçin', 'error');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Yüklənir...';
+  resultBox.innerHTML = '';
+
+  try {
+    const result = await api.upload('/inventory/import', formData);
+    let html = `<div style="color: var(--success); font-weight:600;">✓ ${result.created} yeni, ${result.updated} yenilənmiş mal (${result.total} sətirdən)</div>`;
+    if (result.errors.length > 0) {
+      html += `<div style="color: var(--danger); margin-top:6px;">${result.errors.length} xəta:</div><ul style="margin:4px 0 0 18px; color: var(--danger); font-size:12px;">`;
+      html += result.errors.slice(0, 10).map(e => `<li>${escapeHtml(e)}</li>`).join('');
+      html += `</ul>`;
+    }
+    resultBox.innerHTML = html;
+    showToast('İdxal tamamlandı', 'success');
+    fileInput.value = '';
+  } catch (err) {
+    resultBox.innerHTML = `<div style="color: var(--danger);">${escapeHtml(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Faylı yüklə';
+  }
+});
+</script>
+</body>
+</html>

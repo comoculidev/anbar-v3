@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bütün istəklər — Anbar Sistemi</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="tag-dot"></span>Anbar Sistemi</div>
+    <nav class="nav-group">
+      <div class="nav-label">Superadmin</div>
+      <a href="inventory.html" class="nav-link">Tam inventar</a>
+      <a href="requests.html" class="nav-link active">Bütün istəklər <span class="badge" id="reqBadge" style="display:none">0</span></a>
+      <a href="wishlist.html" class="nav-link">Arzu olunan mallar</a>
+      <a href="users.html" class="nav-link">İstifadəçilər</a>
+      <a href="settings.html" class="nav-link">Parametrlər</a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="avatar" id="avatarInitial">S</div>
+        <div>
+          <div class="name" id="userName">—</div>
+          <div class="role">Superadmin</div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="logout()">Çıxış et</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <h1>Bütün istəklər</h1>
+        <p>İstifadəçi razılıq verdikdən sonra istəklər burada son təsdiqinizi gözləyir. Miqdarı dəyişsəniz, yenidən istifadəçinin razılığına göndərilir.</p>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <select class="search-input" id="statusFilter" style="max-width:220px;">
+        <option value="pending_superadmin">Sizin təsdiqinizi gözləyir</option>
+        <option value="pending">Anbardarda (yeni)</option>
+        <option value="pending_agreement">Razılıq gözlənilir</option>
+        <option value="pending_delivery">Təhvilə hazırdır</option>
+        <option value="completed">Təhvil verilib</option>
+        <option value="rejected">Rədd edilib</option>
+        <option value="">Hamısı</option>
+      </select>
+      <label class="muted" style="font-size:13px; display:flex; align-items:center; gap:6px;">
+        Tarix:
+        <input type="date" id="exportFrom" style="padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+        —
+        <input type="date" id="exportTo" style="padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+      </label>
+      <button class="btn btn-outline" id="exportBtn">⬇ Excel export</button>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>İstifadəçi</th>
+            <th>Mal</th>
+            <th>İstənilən / Cari say</th>
+            <th>Dəyəri (AZN)</th>
+            <th>Anbarda mövcud</th>
+            <th>Status</th>
+            <th style="width:60px;"></th>
+            <th style="width:200px;">Əməliyyat</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+      <div id="emptyState" class="empty-state" style="display:none;">
+        <div class="icon">💰</div>
+        <h3>İstək yoxdur</h3>
+        <p>Seçilmiş filtrə uyğun istək tapılmadı.</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Təsdiq (miqdarı görüb/dəyişib göndər) -->
+<div class="modal-overlay" id="approveModal" style="display:none;">
+  <div class="modal">
+    <h2>İstəyi təsdiqlə</h2>
+    <p class="modal-sub" id="approveSub"></p>
+    <div class="field">
+      <label for="approveQty">Miqdar</label>
+      <input type="number" id="approveQty" min="1">
+      <div class="field-hint">Miqdarı dəyişməsəniz istək birbaşa təhvilə hazır olacaq. Dəyişsəniz, yenidən istifadəçinin razılığına göndəriləcək.</div>
+    </div>
+    <div class="field-error" id="approveError" style="display:none;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="cancelApprove">Ləğv et</button>
+      <button class="btn btn-success" id="confirmApprove">Təsdiqlə</button>
+    </div>
+  </div>
+</div>
+
+<!-- Detallar modalı -->
+<div class="modal-overlay" id="detailsModal" style="display:none;">
+  <div class="modal">
+    <h2>İstək detalları</h2>
+    <div id="detailsContent" style="font-size:14px; line-height:1.7;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="closeDetails">Bağla</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/socket-client.js"></script>
+<script src="../js/notif-badges.js"></script>
+<script>
+let approveTarget = null;
+
+(async () => {
+  const user = await requireAuth('superadmin');
+  if (!user) return;
+  document.getElementById('userName').textContent = user.full_name;
+  document.getElementById('avatarInitial').textContent = user.full_name.charAt(0).toUpperCase();
+  initNotifBadges({ requestStatus: 'pending_superadmin', includeWishlist: false });
+  loadRequests();
+
+  const socket = connectSocket();
+  socket.on('request:new', loadRequests);
+  socket.on('request:updated', loadRequests);
+})();
+
+document.getElementById('statusFilter').addEventListener('change', loadRequests);
+document.getElementById('exportBtn').addEventListener('click', () => {
+  const from = document.getElementById('exportFrom').value;
+  const to = document.getElementById('exportTo').value;
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  const qs = params.toString();
+  window.location.href = `/api/requests/export${qs ? '?' + qs : ''}`;
+});
+
+async function loadRequests() {
+  const tbody = document.getElementById('tableBody');
+  const status = document.getElementById('statusFilter').value;
+  tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:40px; color:var(--ink-500);">Yüklənir...</td></tr>`;
+
+  try {
+    const params = status ? `?status=${status}` : '';
+    const { requests } = await api.get(`/requests${params}`);
+    renderTable(requests);
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function renderTable(requests) {
+  const tbody = document.getElementById('tableBody');
+  const emptyState = document.getElementById('emptyState');
+
+  if (requests.length === 0) {
+    tbody.innerHTML = '';
+    emptyState.style.display = 'block';
+    return;
+  }
+  emptyState.style.display = 'none';
+
+  tbody.innerHTML = requests.map(r => `
+    <tr>
+      <td><strong>${escapeHtml(r.user_full_name)}</strong><br><span class="muted" style="font-size:12px;">${escapeHtml(r.username)}</span></td>
+      <td>${escapeHtml(r.item_name)}<br><span class="tag-mono">${escapeHtml(r.inventory_number)}</span></td>
+      <td><span class="qty">${r.requested_qty} ${escapeHtml(r.unit || '')}</span>${r.approved_qty ? ` <span class="muted" style="font-size:12px;">→ ${r.approved_qty}</span>` : ''}</td>
+      <td class="mono">${Number(r.unit_value).toFixed(2)}</td>
+      <td><span class="qty ${r.stock_qty <= 3 ? 'low' : ''}">${r.stock_qty} ${escapeHtml(r.unit || '')}</span></td>
+      <td><span class="status-pill ${r.status}">${STATUS_LABELS[r.status]}</span></td>
+      <td><button class="btn btn-outline btn-sm" onclick='openDetails(${JSON.stringify(r)})'>ℹ️</button></td>
+      <td>${renderActions(r)}</td>
+    </tr>
+  `).join('');
+}
+
+function renderActions(r) {
+  if (r.status === 'pending_superadmin') {
+    return `
+      <div class="row-actions">
+        <button class="btn btn-success btn-sm" onclick='openApprove(${JSON.stringify(r)})'>Təsdiqlə</button>
+        <button class="btn btn-danger btn-sm" onclick="rejectRequest(${r.id})">Rədd et</button>
+      </div>`;
+  }
+  if (r.status === 'pending_delivery') {
+    return `
+      <div class="row-actions">
+        <button class="btn btn-success btn-sm" onclick="deliverRequest(${r.id})">Təhvil verildi</button>
+        <button class="btn btn-danger btn-sm" onclick="declineDelivery(${r.id})">İmtina et</button>
+      </div>`;
+  }
+  return '<span class="muted">—</span>';
+}
+
+// ---------- Detallar ----------
+const detailsModal = document.getElementById('detailsModal');
+function openDetails(r) {
+  document.getElementById('detailsContent').innerHTML = `
+    <p><strong>İstəyən:</strong> ${escapeHtml(r.user_full_name)} (${escapeHtml(r.username)})</p>
+    <p><strong>Mal:</strong> ${escapeHtml(r.item_name)} <span class="tag-mono">${escapeHtml(r.inventory_number)}</span></p>
+    <p><strong>İstənilən say:</strong> ${r.requested_qty} ${escapeHtml(r.unit || '')}</p>
+    <p><strong>Təklif/verilən say:</strong> ${r.approved_qty ?? '—'} ${r.approved_qty ? escapeHtml(r.unit || '') : ''}</p>
+    <p><strong>Anbarda mövcud:</strong> ${r.stock_qty} ${escapeHtml(r.unit || '')}</p>
+    <p><strong>Dəyəri:</strong> ${Number(r.unit_value).toFixed(2)} AZN</p>
+    <p><strong>Təyinat:</strong><br>${r.purpose ? escapeHtml(r.purpose) : '—'}</p>
+    <p><strong>Status:</strong> <span class="status-pill ${r.status}">${STATUS_LABELS[r.status]}</span></p>
+    <p><strong>Göndərilmə tarixi:</strong> ${formatDate(r.created_at)}</p>
+    ${r.delivered_at ? `<p><strong>Təhvil tarixi:</strong> ${formatDate(r.delivered_at)}</p>` : ''}
+  `;
+  detailsModal.style.display = 'flex';
+}
+document.getElementById('closeDetails').addEventListener('click', () => detailsModal.style.display = 'none');
+
+// ---------- Təsdiq ----------
+const approveModal = document.getElementById('approveModal');
+
+function openApprove(r) {
+  approveTarget = r;
+  document.getElementById('approveSub').textContent =
+    `${r.user_full_name} — "${r.item_name}" (istənilən: ${r.requested_qty} ${r.unit || ''}, hazırkı: ${r.approved_qty} ${r.unit || ''})`;
+  document.getElementById('approveQty').value = r.approved_qty;
+  document.getElementById('approveError').style.display = 'none';
+  approveModal.style.display = 'flex';
+}
+
+document.getElementById('cancelApprove').addEventListener('click', () => approveModal.style.display = 'none');
+
+document.getElementById('confirmApprove').addEventListener('click', async () => {
+  const qty = Number(document.getElementById('approveQty').value);
+  const errorBox = document.getElementById('approveError');
+  const btn = document.getElementById('confirmApprove');
+
+  if (!qty || qty <= 0) {
+    errorBox.textContent = 'Miqdar 0-dan böyük olmalıdır.';
+    errorBox.style.display = 'block';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Göndərilir...';
+
+  try {
+    const result = await api.patch(`/requests/${approveTarget.id}/superadmin`, { action: 'approve', proposed_qty: qty });
+    const msg = result.request.status === 'pending_agreement'
+      ? 'Miqdar dəyişdi, yenidən istifadəçinin razılığına göndərildi'
+      : 'Təsdiqləndi, təhvilə hazırdır';
+    showToast(msg, 'success');
+    approveModal.style.display = 'none';
+    loadRequests();
+  } catch (err) {
+    errorBox.textContent = err.message;
+    errorBox.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Təsdiqlə';
+  }
+});
+
+async function rejectRequest(id) {
+  try {
+    await api.patch(`/requests/${id}/superadmin`, { action: 'reject' });
+    showToast('İstək rədd edildi', 'default');
+    loadRequests();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// ---------- Təhvil ----------
+async function deliverRequest(id) {
+  if (!confirm('Mal fiziki təhvil verildimi? Təsdiqləsəniz anbardan həmin miqdar silinəcək.')) return;
+  try {
+    await api.post(`/requests/${id}/deliver`);
+    showToast('Təhvil qeyd edildi, anbardan silindi', 'success');
+    loadRequests();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function declineDelivery(id) {
+  if (!confirm('Bu istəkdən imtina edilsin? Anbardan heç nə silinməyəcək.')) return;
+  try {
+    await api.post(`/requests/${id}/deliver-decline`);
+    showToast('İstəkdən imtina edildi', 'default');
+    loadRequests();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+</script>
+</body>
+</html>

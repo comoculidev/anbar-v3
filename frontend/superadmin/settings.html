@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parametrlər — Anbar Sistemi</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="tag-dot"></span>Anbar Sistemi</div>
+    <nav class="nav-group">
+      <div class="nav-label">Superadmin</div>
+      <a href="inventory.html" class="nav-link">Tam inventar</a>
+      <a href="requests.html" class="nav-link">Bütün istəklər <span class="badge" id="reqBadge" style="display:none">0</span></a>
+      <a href="wishlist.html" class="nav-link">Arzu olunan mallar</a>
+      <a href="users.html" class="nav-link">İstifadəçilər</a>
+      <a href="settings.html" class="nav-link active">Parametrlər</a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="avatar" id="avatarInitial">S</div>
+        <div>
+          <div class="name" id="userName">—</div>
+          <div class="role">Superadmin</div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="logout()">Çıxış et</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <h1>Parametrlər</h1>
+        <p>Sistemin bəzi funksiyalarını istənilən vaxt aktiv/deaktiv edin. Dəyişikliklər dərhal bütün istifadəçilər üçün tətbiq olunur.</p>
+      </div>
+    </div>
+
+    <div class="card" style="padding: 6px 24px; max-width: 640px;">
+      <div class="settings-row">
+        <div class="settings-info">
+          <h3>Arzu olunan mallar</h3>
+          <p>Deaktiv edildikdə istifadəçilər yeni "arzu olunan mal" tələbi göndərə bilməyəcək (mövcud tələbləri hələ də görəcəklər).</p>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="wishlistToggle">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-info">
+          <h3>Adminlərin tam inventarı görməsi</h3>
+          <p>Aktiv edildikdə adminlər sidebar-da "Tam inventar" bölməsindən bütün malların say/dəyər daxil tam siyahısını (yalnız oxumaq üçün) görə bilər. Mal əlavə etmə funksiyası bu parametrdən asılı olmayaraq həmişə açıqdır.</p>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="adminInventoryToggle">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/socket-client.js"></script>
+<script src="../js/notif-badges.js"></script>
+<script>
+const wishlistToggle = document.getElementById('wishlistToggle');
+const adminInventoryToggle = document.getElementById('adminInventoryToggle');
+
+(async () => {
+  const user = await requireAuth('superadmin');
+  if (!user) return;
+  document.getElementById('userName').textContent = user.full_name;
+  document.getElementById('avatarInitial').textContent = user.full_name.charAt(0).toUpperCase();
+  initNotifBadges({ requestStatus: 'pending_superadmin', includeWishlist: false });
+
+  await loadSettings();
+
+  const socket = connectSocket();
+  socket.on('settings:updated', (settings) => applySettings(settings));
+})();
+
+async function loadSettings() {
+  try {
+    const settings = await api.get('/settings');
+    applySettings(settings);
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function applySettings(settings) {
+  wishlistToggle.checked = !!settings.wishlist_enabled;
+  adminInventoryToggle.checked = !!settings.admin_full_inventory_visible;
+}
+
+wishlistToggle.addEventListener('change', () => updateSetting('wishlist_enabled', wishlistToggle.checked, wishlistToggle));
+adminInventoryToggle.addEventListener('change', () => updateSetting('admin_full_inventory_visible', adminInventoryToggle.checked, adminInventoryToggle));
+
+async function updateSetting(key, value, checkboxEl) {
+  checkboxEl.disabled = true;
+  try {
+    await api.patch('/settings', { [key]: value });
+    showToast('Parametr yeniləndi', 'success');
+  } catch (err) {
+    checkboxEl.checked = !value; // uğursuz olsa geri qaytar
+    showToast(err.message, 'error');
+  } finally {
+    checkboxEl.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>İnventar — Anbar Sistemi (Superadmin)</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="tag-dot"></span>Anbar Sistemi</div>
+    <nav class="nav-group">
+      <div class="nav-label">Superadmin</div>
+      <a href="inventory.html" class="nav-link active">Tam inventar</a>
+      <a href="requests.html" class="nav-link">Bütün istəklər <span class="badge" id="reqBadge" style="display:none">0</span></a>
+      <a href="wishlist.html" class="nav-link">Arzu olunan mallar</a>
+      <a href="users.html" class="nav-link">İstifadəçilər</a>
+      <a href="settings.html" class="nav-link">Parametrlər</a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="avatar" id="avatarInitial">S</div>
+        <div>
+          <div class="name" id="userName">—</div>
+          <div class="role">Superadmin</div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="logout()">Çıxış et</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <h1>Tam inventar</h1>
+        <p>Anbardakı bütün malların tam siyahısı — yalnız superadmin görə/redaktə edə bilər.</p>
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-outline" id="exportBtn">⬇ Excel export</button>
+        <button class="btn btn-accent" id="addBtn">+ Yeni mal</button>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" class="search-input" id="searchInput" placeholder="Ad və ya inventar nömrəsi ilə axtar...">
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>Mal adı</th>
+            <th>İnventar nömrəsi</th>
+            <th>Say</th>
+            <th>Ölçü vahidi</th>
+            <th>Dəyər (AZN)</th>
+            <th>Yenilənib</th>
+            <th style="width:120px;">Əməliyyat</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+      <div id="emptyState" class="empty-state" style="display:none;">
+        <div class="icon">📦</div>
+        <h3>Nəticə tapılmadı</h3>
+        <p>Axtarışınıza uyğun mal yoxdur.</p>
+      </div>
+      <div class="pagination" id="pagination"></div>
+    </div>
+  </main>
+</div>
+
+<!-- Əlavə et / Redaktə et modalı -->
+<div class="modal-overlay" id="itemModal" style="display:none;">
+  <div class="modal">
+    <h2 id="modalTitle">Yeni mal əlavə et</h2>
+    <p class="modal-sub">Mal məlumatlarını daxil edin.</p>
+    <form id="itemForm">
+      <input type="hidden" id="itemId">
+      <div class="field">
+        <label for="itemName">Mal adı</label>
+        <input type="text" id="itemName" required placeholder="Məs. Lazer printer HP M404">
+      </div>
+      <div class="field">
+        <label for="itemNumber">İnventar nömrəsi</label>
+        <input type="text" id="itemNumber" required placeholder="Məs. INV-00231">
+      </div>
+      <div class="field">
+        <label for="itemQty">Say</label>
+        <input type="number" id="itemQty" min="0" required placeholder="0">
+      </div>
+      <div class="field">
+        <label for="itemUnit">Ölçü vahidi</label>
+        <input type="text" id="itemUnit" list="unitOptions" value="ədəd">
+        <datalist id="unitOptions">
+          <option value="ədəd"></option>
+          <option value="kg"></option>
+          <option value="litr"></option>
+          <option value="paket"></option>
+          <option value="qutu"></option>
+          <option value="metr"></option>
+          <option value="dəst"></option>
+        </datalist>
+      </div>
+      <div class="field">
+        <label for="itemValue">Dəyəri (AZN) — vahid qiymət</label>
+        <input type="number" id="itemValue" min="0" step="0.01" placeholder="0.00">
+        <div class="field-hint">500 AZN-dən yuxarı dəyərli mallardan gələn istəklər superadmin təsdiqi tələb edir.</div>
+      </div>
+      <div class="field-error" id="itemError" style="display:none;"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-outline" id="cancelModal">Ləğv et</button>
+        <button type="submit" class="btn btn-accent" id="saveBtn">Yadda saxla</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Silmə təsdiqi -->
+<div class="modal-overlay" id="deleteModal" style="display:none;">
+  <div class="modal">
+    <h2>Malı silmək istəyirsiniz?</h2>
+    <p class="modal-sub" id="deleteText">Bu əməliyyat geri qaytarıla bilməz.</p>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="cancelDelete">Ləğv et</button>
+      <button class="btn btn-danger" id="confirmDelete">Sil</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/socket-client.js"></script>
+<script src="../js/notif-badges.js"></script>
+<script>
+let currentPage = 1;
+let currentQuery = '';
+let searchDebounce = null;
+let deleteTargetId = null;
+
+(async () => {
+  const user = await requireAuth('superadmin');
+  if (!user) return;
+  document.getElementById('userName').textContent = user.full_name;
+  document.getElementById('avatarInitial').textContent = user.full_name.charAt(0).toUpperCase();
+  initNotifBadges({ requestStatus: 'pending_superadmin', includeWishlist: false });
+  loadInventory();
+})();
+
+async function loadInventory() {
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:40px; color:var(--ink-500);">Yüklənir...</td></tr>`;
+
+  try {
+    const params = new URLSearchParams({ page: currentPage });
+    if (currentQuery) params.set('q', currentQuery);
+    const data = await api.get(`/inventory?${params.toString()}`);
+    renderTable(data);
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function renderTable(data) {
+  const tbody = document.getElementById('tableBody');
+  const emptyState = document.getElementById('emptyState');
+
+  if (data.items.length === 0) {
+    tbody.innerHTML = '';
+    emptyState.style.display = 'block';
+    document.getElementById('pagination').innerHTML = '';
+    return;
+  }
+  emptyState.style.display = 'none';
+
+  tbody.innerHTML = data.items.map(item => `
+    <tr>
+      <td><strong>${escapeHtml(item.name)}</strong></td>
+      <td><span class="tag-mono">${escapeHtml(item.inventory_number)}</span></td>
+      <td><span class="qty ${item.quantity <= 3 ? 'low' : ''}">${item.quantity}</span></td>
+      <td class="muted">${escapeHtml(item.unit)}</td>
+      <td class="mono ${Number(item.unit_value) > 500 ? '' : 'muted'}">${Number(item.unit_value).toFixed(2)}</td>
+      <td class="muted">${formatDate(item.updated_at)}</td>
+      <td>
+        <div class="row-actions">
+          <button class="btn btn-outline btn-sm" onclick='openEdit(${JSON.stringify(item)})'>Redaktə</button>
+          <button class="btn btn-danger btn-sm" onclick="openDelete(${item.id}, '${escapeHtml(item.name).replace(/'/g, "\\'")}')">Sil</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+
+  renderPagination(data);
+}
+
+function renderPagination(data) {
+  const el = document.getElementById('pagination');
+  const { page, totalPages, total, pageSize } = data;
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, total);
+
+  let pagesHtml = '';
+  const maxButtons = 5;
+  let start = Math.max(1, page - 2);
+  let end = Math.min(totalPages, start + maxButtons - 1);
+  start = Math.max(1, end - maxButtons + 1);
+
+  for (let p = start; p <= end; p++) {
+    pagesHtml += `<button class="page-btn ${p === page ? 'active' : ''}" onclick="goToPage(${p})">${p}</button>`;
+  }
+
+  el.innerHTML = `
+    <span>${total} maldan ${from}–${to} göstərilir</span>
+    <div class="pages">
+      <button class="page-btn" onclick="goToPage(${page - 1})" ${page <= 1 ? 'disabled' : ''}>‹</button>
+      ${pagesHtml}
+      <button class="page-btn" onclick="goToPage(${page + 1})" ${page >= totalPages ? 'disabled' : ''}>›</button>
+    </div>
+  `;
+}
+
+function goToPage(p) {
+  if (p < 1) return;
+  currentPage = p;
+  loadInventory();
+}
+
+document.getElementById('searchInput').addEventListener('input', (e) => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => {
+    currentQuery = e.target.value.trim();
+    currentPage = 1;
+    loadInventory();
+  }, 350);
+});
+
+// ---------- Modal: əlavə et / redaktə ----------
+const itemModal = document.getElementById('itemModal');
+const itemForm = document.getElementById('itemForm');
+const itemError = document.getElementById('itemError');
+
+document.getElementById('addBtn').addEventListener('click', () => openAdd());
+document.getElementById('cancelModal').addEventListener('click', () => itemModal.style.display = 'none');
+
+function openAdd() {
+  document.getElementById('modalTitle').textContent = 'Yeni mal əlavə et';
+  itemForm.reset();
+  document.getElementById('itemId').value = '';
+  document.getElementById('itemUnit').value = 'ədəd';
+  itemError.style.display = 'none';
+  itemModal.style.display = 'flex';
+}
+
+function openEdit(item) {
+  document.getElementById('modalTitle').textContent = 'Malı redaktə et';
+  document.getElementById('itemId').value = item.id;
+  document.getElementById('itemName').value = item.name;
+  document.getElementById('itemNumber').value = item.inventory_number;
+  document.getElementById('itemQty').value = item.quantity;
+  document.getElementById('itemUnit').value = item.unit;
+  document.getElementById('itemValue').value = item.unit_value;
+  itemError.style.display = 'none';
+  itemModal.style.display = 'flex';
+}
+
+itemForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = document.getElementById('itemId').value;
+  const payload = {
+    name: document.getElementById('itemName').value.trim(),
+    inventory_number: document.getElementById('itemNumber').value.trim(),
+    quantity: Number(document.getElementById('itemQty').value),
+    unit: document.getElementById('itemUnit').value.trim() || 'ədəd',
+    unit_value: document.getElementById('itemValue').value || 0,
+  };
+
+  const saveBtn = document.getElementById('saveBtn');
+  saveBtn.disabled = true;
+  saveBtn.innerHTML = '<span class="spinner"></span> Yadda saxlanılır...';
+
+  try {
+    if (id) {
+      await api.put(`/inventory/${id}`, payload);
+      showToast('Mal yeniləndi', 'success');
+    } else {
+      await api.post('/inventory', payload);
+      showToast('Mal əlavə edildi', 'success');
+    }
+    itemModal.style.display = 'none';
+    loadInventory();
+  } catch (err) {
+    itemError.textContent = err.message;
+    itemError.style.display = 'block';
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Yadda saxla';
+  }
+});
+
+// ---------- Silmə ----------
+const deleteModal = document.getElementById('deleteModal');
+
+function openDelete(id, name) {
+  deleteTargetId = id;
+  document.getElementById('deleteText').textContent = `"${name}" anbardan silinəcək. Bu əməliyyat geri qaytarıla bilməz.`;
+  deleteModal.style.display = 'flex';
+}
+
+document.getElementById('cancelDelete').addEventListener('click', () => deleteModal.style.display = 'none');
+
+document.getElementById('confirmDelete').addEventListener('click', async () => {
+  try {
+    await api.delete(`/inventory/${deleteTargetId}`);
+    showToast('Mal silindi', 'success');
+    deleteModal.style.display = 'none';
+    loadInventory();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+});
+
+// ---------- Excel export ----------
+document.getElementById('exportBtn').addEventListener('click', () => {
+  window.location.href = '/api/inventory/export';
+});
+</script>
+</body>
+</html>
